@@ -492,12 +492,30 @@ select.status-select{font-weight:600; border-radius:6px; padding:5px 8px;}
   </main>
 </div>
 
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <script>
+/* =========================================================================
+   FIREBASE
+========================================================================= */
+const firebaseConfig = {
+  apiKey: "AIzaSyDju7kpdxfAaC6R96B_jzXjd4PNfHl3tPY",
+  authDomain: "intranet-giio.firebaseapp.com",
+  projectId: "intranet-giio",
+  storageBucket: "intranet-giio.firebasestorage.app",
+  messagingSenderId: "958785505076",
+  appId: "1:958785505076:web:57d44862c9c2778c264761"
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+const panelDocRef = db.collection("panel").doc("state");
+
 /* =========================================================================
    DATOS
 ========================================================================= */
-const STORAGE_KEY = "fibranet-tracker-v2";
 const SESSION_KEY = "fibranet-session";
+let CURRENT_TARGET = "dashboard";
+let dataReady = false;
 const QUARTER_LABEL = "Q3 2026 (Jul – Sep)";
 const ESTADOS_ACT = ["Pendiente","En Progreso","Completada","Bloqueada"];
 const PRIORIDADES = ["Alta","Media","Baja"];
@@ -625,19 +643,6 @@ let uidCounter = 1;
 let CURRENT_USER = null;
 function newId(){ return uidCounter++; }
 
-function loadData(){
-  const raw = localStorage.getItem(STORAGE_KEY);
-  if(raw){
-    try{
-      DATA = JSON.parse(raw);
-      uidCounter = DATA._uidCounter || 1000;
-      migrateData();
-      return;
-    }catch(e){ console.warn("Respaldo local ilegible, se reinician los datos."); }
-  }
-  DATA = seedData();
-  uidCounter = DATA._uidCounter;
-}
 function migrateData(){
   if(!DATA.infra) DATA.infra = {pops:[], segmentos:[]};
   if(!DATA.infra.pops) DATA.infra.pops = [];
@@ -652,9 +657,61 @@ function migrateData(){
   }
   if(!DATA.fleet.units) DATA.fleet.units = [];
 }
+
+/* ---------- sincronizacion en tiempo real (Firestore) ---------- */
 function saveData(){
   DATA._uidCounter = uidCounter;
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(DATA));
+  panelDocRef.set(DATA).catch(err=>{
+    console.error("Error guardando en Firestore:", err);
+    alert("No se pudo guardar el cambio. Revisa tu conexión a internet e intenta de nuevo.");
+  });
+}
+
+function isTypingSomewhere(){
+  const ae = document.activeElement;
+  return ae && ["INPUT","TEXTAREA","SELECT"].includes(ae.tagName) && ae.id !== "login-user" && ae.id !== "login-pass";
+}
+
+function initRealtimeSync(){
+  const loginBtn = document.getElementById("login-submit");
+  loginBtn.disabled = true;
+  loginBtn.textContent = "Conectando…";
+
+  panelDocRef.onSnapshot((snap)=>{
+    if(!snap.exists){
+      const seed = seedData();
+      panelDocRef.set(seed).catch(err=>console.error("Error inicializando datos:", err));
+      return; // este mismo listener se volverá a disparar cuando el set() se complete
+    }
+
+    DATA = snap.data();
+    uidCounter = DATA._uidCounter || 1000;
+    migrateData();
+
+    if(!dataReady){
+      dataReady = true;
+      loginBtn.disabled = false;
+      loginBtn.textContent = "Ingresar";
+      if(restoreSession()){
+        showApp();
+      }
+    } else {
+      handleRemoteUpdate();
+    }
+  }, (err)=>{
+    console.error("Error de conexión con Firestore:", err);
+    const errBox = document.getElementById("login-error");
+    errBox.textContent = "No se pudo conectar con la base de datos. Verifica tu conexión a internet.";
+    errBox.style.display = "block";
+  });
+}
+
+function handleRemoteUpdate(){
+  const appVisible = document.getElementById("app-root").classList.contains("visible");
+  if(!appVisible) return;
+  if(isTypingSomewhere()) return; // evita interrumpir mientras alguien está escribiendo
+  buildNav();
+  switchSection(CURRENT_TARGET);
 }
 
 /* =========================================================================
@@ -856,6 +913,7 @@ function setUpdateDate(){
 }
 
 function switchSection(target){
+  CURRENT_TARGET = target;
   const area = areaOf(target);
   document.querySelectorAll(".nav-item").forEach(n=>n.classList.toggle("active", n.dataset.area===area));
   renderSubtabs(target);
@@ -1844,22 +1902,20 @@ document.getElementById("login-user").addEventListener("keydown", e=>{ if(e.key=
 document.getElementById("btn-logout").addEventListener("click", logout);
 
 function doLogin(){
+  if(!dataReady) return;
   const u = document.getElementById("login-user").value;
   const p = document.getElementById("login-pass").value;
   if(tryLogin(u,p)){
     document.getElementById("login-error").style.display = "none";
     showApp();
   } else {
+    document.getElementById("login-error").textContent = "Usuario o contraseña incorrectos.";
     document.getElementById("login-error").style.display = "block";
   }
 }
 
-loadData();
-if(restoreSession()){
-  showApp();
-} else {
-  document.getElementById("login-screen").style.display = "flex";
-}
+document.getElementById("login-screen").style.display = "flex";
+initRealtimeSync();
 </script>
 </body>
 </html>
